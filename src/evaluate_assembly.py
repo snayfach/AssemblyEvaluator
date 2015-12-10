@@ -9,40 +9,52 @@ import os, argparse, gzip, sys, subprocess, Bio.SeqIO
 class Genome:
 	""" Base class for genome sequences """
 	def __init__(self, args):
-		self.name = os.path.basename(args['ref'])
+		self.name = os.path.basename(args['genome'])
 		self.contigs = self.init_contigs(args)
+		self.count_contigs = len(self.contigs.keys())
 		self.length = self.length()
-
+		self.uncalled = self.uncalled_bp()
+		self.length_trim = self.length - self.uncalled
+		
 	def init_contigs(self, args):
 		contigs = {}
-		for rec in Bio.SeqIO.parse(args['ref'], 'fasta'):
+		for rec in Bio.SeqIO.parse(args['genome'], 'fasta'):
 			contigs[rec.id] = Contig(rec)
 		return contigs
 
 	def length(self):
-		return(sum([contig.length for contig in self.contigs.values()]))
+		return(sum([c.length for c in self.contigs.values()]))
+
+	def uncalled_bp(self):
+		return(sum([c.seq.count('N') for c in self.contigs.values()]))
 
 class Assembly:
 	""" Base class for assembly sequences """
 	def __init__(self, args):
-		self.name = os.path.basename(args['query'])
+		self.name = os.path.basename(args['assembly'])
 		self.contigs = self.init_contigs(args)
+		self.count_contigs = len(self.contigs.keys())
 		self.length = self.length()
-
+		self.uncalled = self.uncalled_bp()
+		self.length_trim = self.length - self.uncalled
+				
 	def init_contigs(self, args):
 		contigs = {}
-		for rec in Bio.SeqIO.parse(args['query'], 'fasta'):
+		for rec in Bio.SeqIO.parse(args['assembly'], 'fasta'):
 			contigs[rec.id] = Contig(rec)
 		return contigs
 
 	def length(self):
 		return(sum([contig.length for contig in self.contigs.values()]))
+
+	def uncalled_bp(self):
+		return(sum([c.seq.count('N') for c in self.contigs.values()]))
 
 class Contig:
 	""" Base class for contig sequences """
 	def __init__(self, rec):
 		self.name = rec.id
-		self.seq = str(rec.seq)
+		self.seq = str(rec.seq).upper()
 		self.length = len(self.seq)
 		self.chunks = []
 		self.chunk_ids = set([])
@@ -56,9 +68,9 @@ def parse_arguments():
 	parser = argparse.ArgumentParser(
 		formatter_class=argparse.ArgumentDefaultsHelpFormatter,
 		description="""Evaluate a metagenomic assembly by mapping to a reference genome""")
-	parser.add_argument('--query', type=str, required=True,
+	parser.add_argument('--assembly', type=str, required=True,
 						help="Path to input multi-FASTA file containing one or more contigs")
-	parser.add_argument('--ref', type=str, required=False,
+	parser.add_argument('--genome', type=str, required=False,
 						help="Path to reference genome FASTA file")
 	parser.add_argument('--out', dest='out', type=str, required=True,
 						help="""
@@ -101,11 +113,11 @@ def run_shell_command(command):
 def run_blast(args):
 	""" Run blastn """
 	cmd = '%s ' % args['stream_chunks']
-	cmd += '--fasta %s ' % args['query']
+	cmd += '--fasta %s ' % args['assembly']
 	cmd += '--chunk_size %s | ' % args['chunk_size']
 	cmd += '%s ' % args['blastn']
 	cmd += '-query /dev/stdin '
-	cmd += '-subject %s ' % args['ref']
+	cmd += '-subject %s ' % args['genome']
 	cmd += '-outfmt 6 '
 	cmd += '-max_target_seqs 1 '
 	cmd += '-num_threads %s ' % args['threads']
@@ -150,6 +162,8 @@ def store_alignments(genome, assembly):
 		assembly_contig = m8['query_id'].rsplit('_', 1)[0]
 		chunk_id = m8['query_id'].rsplit('_', 1)[1]
 		genome_contig = m8['target_id']
+		if m8['query_id'] == 'accn|NC_009513_115':
+			print m8
 		if m8['aln'] < args['aln']:
 			continue
 		elif m8['pid'] < args['pid']:
@@ -162,20 +176,20 @@ def store_alignments(genome, assembly):
 			genome.contigs[genome_contig].chunks.append(m8)
 
 def compute_assembly_stats(assembly):
-	""" Compute total alignment length and chimericity of entire assembly """
-	alignment_length = 0
+	""" Compute total alignment length and precision (i.e. chimericity) of entire assembly """
 	for contig in assembly.contigs.values():
-		for aligned_chunk in contig.chunks:
-			alignment_length += aligned_chunk['aln']
-	assembly.aln = alignment_length
-	assembly.chimeric =  1-float(assembly.aln)/assembly.length
+		contig.aln = sum([c['aln'] for c in contig.chunks])
+		contig.ppv = float(contig.aln)/contig.length
+	assembly.aln = sum([c.aln for c in assembly.contigs.values()])
+	assembly.ppv =  float(assembly.aln)/assembly.length
+	assembly.ppv_trim = assembly.aln/float(assembly.length_trim)
 
 def fetch_aln_coords(contig):
 	""" Get list of alignment coordinates for each alignment to each contig """
 	coords = []
-	for aligned_chunk in contig.chunks:
-		start = min(aligned_chunk['tstart'], aligned_chunk['tend'])
-		end = max(aligned_chunk['tstart'], aligned_chunk['tend'])
+	for c in contig.chunks:
+		start = min(c['tstart'], c['tend'])
+		end = max(c['tstart'], c['tend'])
 		coords.append([start, end])
 	return(sorted(coords))
 
@@ -185,7 +199,7 @@ def merge_aln_coords(sorted_coords):
 	merged_coords = [sorted_coords[0]]
 	for start, end in sorted_coords[1:]:
 		if start <= merged_coords[-1][-1]:
-			merged_coords[-1] = [start, end]
+			merged_coords[-1][-1] = end
 		else:
 			merged_coords.append([start, end])
 	return merged_coords
@@ -196,8 +210,29 @@ def compute_genome_stats(contig):
 		sorted_coords = fetch_aln_coords(contig)
 		merged_coords = merge_aln_coords(sorted_coords)
 		contig.aln = sum([(e - s + 1) for s, e in merged_coords])
+		contig.tpr = contig.aln/float(contig.length)
 	genome.aln = sum([contig.aln for contig in genome.contigs.values()])
-	genome.cov = genome.aln/float(genome.length)
+	genome.tpr = genome.aln/float(genome.length)
+	genome.tpr_trim = genome.aln/float(genome.length_trim)
+
+def write_report(genome, assembly):
+	outfile = open(os.path.join(args['out'], 'summary.txt'), 'w')
+	outfile.write('Genome & Assembly Statistics\n')
+	outfile.write('%s\t%s\n' % ('genome.name', genome.name))
+	outfile.write('%s\t%s\n' % ('genome.count_contigs', genome.count_contigs))
+	outfile.write('%s\t%s\n' % ('genome.length', genome.length))
+	outfile.write('%s\t%s\n' % ('genome.length_trim', genome.length_trim))
+	outfile.write('%s\t%s\n' % ('genome.aln', genome.aln))
+	outfile.write('%s\t%s\n' % ('genome.tpr', genome.tpr))
+	outfile.write('%s\t%s\n' % ('genome.tpr_trim', genome.tpr_trim))
+	outfile.write('\n')
+	outfile.write('%s\t%s\n' % ('assembly.name', assembly.name))
+	outfile.write('%s\t%s\n' % ('assembly.count_contigs', assembly.count_contigs))
+	outfile.write('%s\t%s\n' % ('assembly.length', assembly.length))
+	outfile.write('%s\t%s\n' % ('assembly.length_trim', assembly.length_trim))
+	outfile.write('%s\t%s\n' % ('assembly.aln', assembly.aln))
+	outfile.write('%s\t%s\n' % ('assembly.ppv', assembly.ppv))
+	outfile.write('%s\t%s\n' % ('assembly.ppv_trim', assembly.ppv_trim))
 
 ##
 ## Main
@@ -209,20 +244,18 @@ if __name__ == "__main__":
 	genome = Genome(args)
 	assembly = Assembly(args)
 
+	print("Aligning assembly to reference genome...")
 	run_blast(args)
+	
+	print("Storing results...")
 	store_alignments(genome, assembly)
+	
+	print("Evaluating assembly...")
 	compute_assembly_stats(assembly)
 	compute_genome_stats(genome)
 
-	print(assembly.aln, assembly.chimeric)
-	print(genome.aln, genome.cov, genome.length - genome.aln)
-	print sum([contig.seq.count('n') for contig in genome.contigs.values()])
-
-
-
-
-
-
+	print("Writing report...")
+	write_report(genome, assembly)
 
 
 
