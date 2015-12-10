@@ -1,0 +1,13 @@
+genome.name	557436.4.fna
+genome.count_contigs	1
+genome.length	1999618
+genome.aln	1980612
+genome.tpr	0.99049518458
+
+assembly.name	557436.4.fna
+assembly.count_contigs	1
+assembly.count_mapped	1
+assembly.length	1999618
+assembly.aln	1999618
+assembly.n50	1999618
+assembly.ppv	1.0

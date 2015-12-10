@@ -13,8 +13,6 @@ class Genome:
 		self.contigs = self.init_contigs(args)
 		self.count_contigs = len(self.contigs.keys())
 		self.length = self.length()
-		self.uncalled = self.uncalled_bp()
-		self.length_trim = self.length - self.uncalled
 		
 	def init_contigs(self, args):
 		contigs = {}
@@ -23,10 +21,9 @@ class Genome:
 		return contigs
 
 	def length(self):
-		return(sum([c.length for c in self.contigs.values()]))
-
-	def uncalled_bp(self):
-		return(sum([c.seq.count('N') for c in self.contigs.values()]))
+		total_bp = (sum([c.length for c in self.contigs.values()]))
+		ambig_bp = uncalled_bp(self.contigs)
+		return(total_bp - ambig_bp)
 
 class Assembly:
 	""" Base class for assembly sequences """
@@ -35,8 +32,6 @@ class Assembly:
 		self.contigs = self.init_contigs(args)
 		self.count_contigs = len(self.contigs.keys())
 		self.length = self.length()
-		self.uncalled = self.uncalled_bp()
-		self.length_trim = self.length - self.uncalled
 				
 	def init_contigs(self, args):
 		contigs = {}
@@ -45,10 +40,9 @@ class Assembly:
 		return contigs
 
 	def length(self):
-		return(sum([contig.length for contig in self.contigs.values()]))
-
-	def uncalled_bp(self):
-		return(sum([c.seq.count('N') for c in self.contigs.values()]))
+		total_bp = (sum([c.length for c in self.contigs.values()]))
+		ambig_bp = uncalled_bp(self.contigs)
+		return(total_bp - ambig_bp)
 
 class Contig:
 	""" Base class for contig sequences """
@@ -63,28 +57,40 @@ class Contig:
 ## Functions
 ##
 
+def count_mapped_contigs(assembly):
+	""" Count number of contigs mapped to genome """
+	contig_ids = set([])
+	for contig in assembly.contigs.values():
+		if len(contig.chunks) > 1: contig_ids.add(contig.name)
+	return len(contig_ids)
+
+def uncalled_bp(contigs):
+	""" Count the number of ambiguous base calls across contigs """
+	return(sum([c.seq.count('N') for c in contigs.values()]))
+
 def parse_arguments():
 	""" Parse commandline arguments """
 	parser = argparse.ArgumentParser(
 		formatter_class=argparse.ArgumentDefaultsHelpFormatter,
 		description="""Evaluate a metagenomic assembly by mapping to a reference genome""")
-	parser.add_argument('--assembly', type=str, required=True,
+	parser.add_argument('--assembly', type=str, required=True, metavar='FASTA',
 						help="Path to input multi-FASTA file containing one or more contigs")
-	parser.add_argument('--genome', type=str, required=False,
+	parser.add_argument('--genome', type=str, required=False, metavar='FASTA',
 						help="Path to reference genome FASTA file")
-	parser.add_argument('--out', dest='out', type=str, required=True,
+	parser.add_argument('--out', dest='out', type=str, required=True, metavar='DIR',
 						help="""
-						Output directory:
-						<out>/alignments.m8 (tabular alignments)
+						Output directory: <out>/alignments.m8, <out>/summary.txt
 						""")
-	parser.add_argument('--threads', type=int, default=1,
+	parser.add_argument('--threads', type=int, default=1, metavar='INT',
 						help="Threads to use for BLAST")
-	parser.add_argument('--chunk_size', type=int, default=1000,
+	parser.add_argument('--chunk_size', type=int, default=1000, metavar='INT',
 						help="Chunk size (in bp) for splitting up queries")
-	parser.add_argument('--pid', type=float, default=99,
+	parser.add_argument('--pid', type=float, default=99, metavar='FLOAT',
 						help="Minimum percent identity mapping threshold")
-	parser.add_argument('--aln', type=int, default=200,
+	parser.add_argument('--aln', type=int, default=200, metavar='INT',
 						help="Minimum alignment length mapping threshold")
+	parser.add_argument('--word_size', type=int, default=50, metavar='INT',
+						help="Word size for BLAST")
 	args = vars(parser.parse_args())
 	if not os.path.isdir(args['out']): os.mkdir(args['out'])
 	add_binaries(args)
@@ -120,6 +126,7 @@ def run_blast(args):
 	cmd += '-subject %s ' % args['genome']
 	cmd += '-outfmt 6 '
 	cmd += '-max_target_seqs 1 '
+	cmd += '-word_size %s ' % args['word_size']
 	cmd += '-num_threads %s ' % args['threads']
 	blastout = run_shell_command(cmd)
 	write_m8(args, blastout)
@@ -162,8 +169,6 @@ def store_alignments(genome, assembly):
 		assembly_contig = m8['query_id'].rsplit('_', 1)[0]
 		chunk_id = m8['query_id'].rsplit('_', 1)[1]
 		genome_contig = m8['target_id']
-		if m8['query_id'] == 'accn|NC_009513_115':
-			print m8
 		if m8['aln'] < args['aln']:
 			continue
 		elif m8['pid'] < args['pid']:
@@ -180,9 +185,11 @@ def compute_assembly_stats(assembly):
 	for contig in assembly.contigs.values():
 		contig.aln = sum([c['aln'] for c in contig.chunks])
 		contig.ppv = float(contig.aln)/contig.length
-	assembly.aln = sum([c.aln for c in assembly.contigs.values()])
+	assembly.alns = [c.aln for c in assembly.contigs.values()]
+	assembly.aln = sum(assembly.alns)
 	assembly.ppv =  float(assembly.aln)/assembly.length
-	assembly.ppv_trim = assembly.aln/float(assembly.length_trim)
+	assembly.n50 = compute_n50(assembly)
+	assembly.count_mapped = count_mapped_contigs(assembly)
 
 def fetch_aln_coords(contig):
 	""" Get list of alignment coordinates for each alignment to each contig """
@@ -209,30 +216,35 @@ def compute_genome_stats(contig):
 	for contig in genome.contigs.values():
 		sorted_coords = fetch_aln_coords(contig)
 		merged_coords = merge_aln_coords(sorted_coords)
-		contig.aln = sum([(e - s + 1) for s, e in merged_coords])
+		contig.alns = [(e - s + 1) for s, e in merged_coords]
+		contig.aln = sum(contig.alns)
 		contig.tpr = contig.aln/float(contig.length)
 	genome.aln = sum([contig.aln for contig in genome.contigs.values()])
 	genome.tpr = genome.aln/float(genome.length)
-	genome.tpr_trim = genome.aln/float(genome.length_trim)
+
+def compute_n50(assembly):
+	""" Compute n50 based on contig alignment lengths """
+	x = 0
+	for a in assembly.alns:
+		if x >= assembly.length/2.0: return(x)
+		else: x += a
+	return x
 
 def write_report(genome, assembly):
 	outfile = open(os.path.join(args['out'], 'summary.txt'), 'w')
-	outfile.write('Genome & Assembly Statistics\n')
 	outfile.write('%s\t%s\n' % ('genome.name', genome.name))
 	outfile.write('%s\t%s\n' % ('genome.count_contigs', genome.count_contigs))
 	outfile.write('%s\t%s\n' % ('genome.length', genome.length))
-	outfile.write('%s\t%s\n' % ('genome.length_trim', genome.length_trim))
 	outfile.write('%s\t%s\n' % ('genome.aln', genome.aln))
 	outfile.write('%s\t%s\n' % ('genome.tpr', genome.tpr))
-	outfile.write('%s\t%s\n' % ('genome.tpr_trim', genome.tpr_trim))
 	outfile.write('\n')
 	outfile.write('%s\t%s\n' % ('assembly.name', assembly.name))
 	outfile.write('%s\t%s\n' % ('assembly.count_contigs', assembly.count_contigs))
+	outfile.write('%s\t%s\n' % ('assembly.count_mapped', assembly.count_mapped))
 	outfile.write('%s\t%s\n' % ('assembly.length', assembly.length))
-	outfile.write('%s\t%s\n' % ('assembly.length_trim', assembly.length_trim))
 	outfile.write('%s\t%s\n' % ('assembly.aln', assembly.aln))
+	outfile.write('%s\t%s\n' % ('assembly.n50', assembly.n50))
 	outfile.write('%s\t%s\n' % ('assembly.ppv', assembly.ppv))
-	outfile.write('%s\t%s\n' % ('assembly.ppv_trim', assembly.ppv_trim))
 
 ##
 ## Main
