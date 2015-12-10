@@ -18,9 +18,8 @@ def stream_chunks(args):
 	ext = args['fasta'].split('.')[-1]
 	infile = gzip.open(args['fasta']) if ext == 'gz' else open(args['fasta'])
 	for rec in Bio.SeqIO.parse(infile, 'fasta'):
-
-		chunks = int(math.ceil(len(rec.seq)/float(args['chunk_size'])))
-		for chunk in range(chunks):
+		nchunks = int(math.ceil(len(rec.seq)/float(args['chunk_size'])))
+		for chunk in range(nchunks):
 			start = (chunk + 1) * args['chunk_size'] - args['chunk_size']
 			end = (chunk + 1) * args['chunk_size']
 			seq = rec.seq[start:end].upper()

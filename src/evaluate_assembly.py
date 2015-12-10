@@ -1,6 +1,55 @@
 #!/usr/bin/python
 
-import os, argparse, gzip, sys, subprocess
+import os, argparse, gzip, sys, subprocess, Bio.SeqIO
+
+##
+## Classes
+##
+
+class Genome:
+	""" Base class for genome sequences """
+	def __init__(self, args):
+		self.name = os.path.basename(args['ref'])
+		self.contigs = self.init_contigs(args)
+		self.length = self.length()
+
+	def init_contigs(self, args):
+		contigs = {}
+		for rec in Bio.SeqIO.parse(args['ref'], 'fasta'):
+			contigs[rec.id] = Contig(rec)
+		return contigs
+
+	def length(self):
+		return(sum([contig.length for contig in self.contigs.values()]))
+
+class Assembly:
+	""" Base class for assembly sequences """
+	def __init__(self, args):
+		self.name = os.path.basename(args['query'])
+		self.contigs = self.init_contigs(args)
+		self.length = self.length()
+
+	def init_contigs(self, args):
+		contigs = {}
+		for rec in Bio.SeqIO.parse(args['query'], 'fasta'):
+			contigs[rec.id] = Contig(rec)
+		return contigs
+
+	def length(self):
+		return(sum([contig.length for contig in self.contigs.values()]))
+
+class Contig:
+	""" Base class for contig sequences """
+	def __init__(self, rec):
+		self.name = rec.id
+		self.seq = str(rec.seq)
+		self.length = len(self.seq)
+		self.chunks = []
+		self.chunk_ids = set([])
+
+##
+## Functions
+##
 
 def parse_arguments():
 	""" Parse commandline arguments """
@@ -20,6 +69,10 @@ def parse_arguments():
 						help="Threads to use for BLAST")
 	parser.add_argument('--chunk_size', type=int, default=1000,
 						help="Chunk size (in bp) for splitting up queries")
+	parser.add_argument('--pid', type=float, default=99,
+						help="Minimum percent identity mapping threshold")
+	parser.add_argument('--aln', type=int, default=200,
+						help="Minimum alignment length mapping threshold")
 	args = vars(parser.parse_args())
 	if not os.path.isdir(args['out']): os.mkdir(args['out'])
 	add_binaries(args)
@@ -56,15 +109,15 @@ def run_blast(args):
 	cmd += '-outfmt 6 '
 	cmd += '-max_target_seqs 1 '
 	cmd += '-num_threads %s ' % args['threads']
-	out = run_shell_command(cmd)
-	return out
+	blastout = run_shell_command(cmd)
+	write_m8(args, blastout)
 
 def parse_blast(m8_path):
 	""" Yield formatted record from BLAST m8 file """
 	formats = {
 		0:str, 1:str, 2:float, 3:int, 4:float,
-		5:float, 6:float, 7:float, 8:float,
-		9:float, 10:float, 11:float
+		5:int, 6:int, 7:int, 8:int,
+		9:int, 10:float, 11:float
 	}
 	fields = {
 		0:'query_id',1:'target_id',2:'pid',3:'aln',4:'mis',
@@ -90,13 +143,88 @@ def write_m8(args, blastout):
 	outfile.write(blastout)
 	outfile.close()
 
+def store_alignments(genome, assembly):
+	""" Store alignments """
+	inpath = os.path.join(args['out'], 'alignments.m8')
+	for m8 in parse_blast(inpath):
+		assembly_contig = m8['query_id'].rsplit('_', 1)[0]
+		chunk_id = m8['query_id'].rsplit('_', 1)[1]
+		genome_contig = m8['target_id']
+		if m8['aln'] < args['aln']:
+			continue
+		elif m8['pid'] < args['pid']:
+			continue
+		elif chunk_id in assembly.contigs[assembly_contig].chunk_ids:
+			continue
+		else:
+			assembly.contigs[assembly_contig].chunk_ids.add(chunk_id)
+			assembly.contigs[assembly_contig].chunks.append(m8)
+			genome.contigs[genome_contig].chunks.append(m8)
+
+def compute_assembly_stats(assembly):
+	""" Compute total alignment length and chimericity of entire assembly """
+	alignment_length = 0
+	for contig in assembly.contigs.values():
+		for aligned_chunk in contig.chunks:
+			alignment_length += aligned_chunk['aln']
+	assembly.aln = alignment_length
+	assembly.chimeric =  1-float(assembly.aln)/assembly.length
+
+def fetch_aln_coords(contig):
+	""" Get list of alignment coordinates for each alignment to each contig """
+	coords = []
+	for aligned_chunk in contig.chunks:
+		start = min(aligned_chunk['tstart'], aligned_chunk['tend'])
+		end = max(aligned_chunk['tstart'], aligned_chunk['tend'])
+		coords.append([start, end])
+	return(sorted(coords))
+
+def merge_aln_coords(sorted_coords):
+	""" Merge overlapping alignment coordinates """
+	if len(sorted_coords) == 0: return []
+	merged_coords = [sorted_coords[0]]
+	for start, end in sorted_coords[1:]:
+		if start <= merged_coords[-1][-1]:
+			merged_coords[-1] = [start, end]
+		else:
+			merged_coords.append([start, end])
+	return merged_coords
+
+def compute_genome_stats(contig):
+	""" Compute number of covered positions on genome """
+	for contig in genome.contigs.values():
+		sorted_coords = fetch_aln_coords(contig)
+		merged_coords = merge_aln_coords(sorted_coords)
+		contig.aln = sum([(e - s + 1) for s, e in merged_coords])
+	genome.aln = sum([contig.aln for contig in genome.contigs.values()])
+	genome.cov = genome.aln/float(genome.length)
+
+##
+## Main
+##
 
 if __name__ == "__main__":
 
 	args = parse_arguments()
-	blastout = run_blast(args)
-	write_m8(args, blastout)
+	genome = Genome(args)
+	assembly = Assembly(args)
+
+	run_blast(args)
+	store_alignments(genome, assembly)
+	compute_assembly_stats(assembly)
+	compute_genome_stats(genome)
+
+	print(assembly.aln, assembly.chimeric)
+	print(genome.aln, genome.cov, genome.length - genome.aln)
+	print sum([contig.seq.count('n') for contig in genome.contigs.values()])
 
 
 
+
+
+
+
+
+
+	
 
