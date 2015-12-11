@@ -1,6 +1,6 @@
 #!/usr/bin/python
 
-import os, argparse, gzip, sys, subprocess, Bio.SeqIO
+import os, argparse, gzip, sys, subprocess, Bio.SeqIO, shutil
 
 ##
 ## Classes
@@ -61,7 +61,7 @@ def count_mapped_contigs(assembly):
 	""" Count number of contigs mapped to genome """
 	contig_ids = set([])
 	for contig in assembly.contigs.values():
-		if len(contig.chunks) > 1: contig_ids.add(contig.name)
+		if len(contig.chunks) > 0: contig_ids.add(contig.name)
 	return len(contig_ids)
 
 def uncalled_bp(contigs):
@@ -101,10 +101,11 @@ def add_binaries(args):
 	script_path = os.path.abspath(__file__)
 	script_dir = os.path.dirname(script_path)
 	main_dir = os.path.dirname(script_dir)
-	args['blastp'] = '%s/bin/blastp' % main_dir
+	args['hs-blastn'] = '%s/bin/hs-blastn' % main_dir
 	args['blastn'] = '%s/bin/blastn' % main_dir
 	args['makeblastdb'] = '%s/bin/makeblastdb' % main_dir
 	args['stream_chunks'] = '%s/stream_chunks.py' % script_dir
+	args['db'] = os.path.join(args['out'], os.path.basename(args['genome']))
 
 def run_shell_command(command):
 	""" Capture stdout, stderr. Check unix exit code and exit if non-zero """
@@ -116,20 +117,47 @@ def run_shell_command(command):
 	else:
 		return out
 
+def build_blastdb(args):
+	""" Build HS-BLASTN database """
+	if not os.path.isfile(args['db']):
+		shutil.copy(args['genome'], args['db'])
+	cmd = '%s index %s ' % (args['hs-blastn'], args['db'])
+	out = run_shell_command(cmd)
+
 def run_blast(args):
-	""" Run blastn """
+	""" Run HS-BLASTN """
 	cmd = '%s ' % args['stream_chunks']
 	cmd += '--fasta %s ' % args['assembly']
 	cmd += '--chunk_size %s | ' % args['chunk_size']
-	cmd += '%s ' % args['blastn']
+	cmd += '%s align ' % args['hs-blastn']
 	cmd += '-query /dev/stdin '
-	cmd += '-subject %s ' % args['genome']
+	cmd += '-db %s ' % args['db']
 	cmd += '-outfmt 6 '
-	cmd += '-max_target_seqs 1 '
+	cmd += '-num_alignments 1 '
 	cmd += '-word_size %s ' % args['word_size']
 	cmd += '-num_threads %s ' % args['threads']
 	blastout = run_shell_command(cmd)
+	return(blastout)
+
+def write_m8(args, blastout):
+	""" Write tab delimited m8 file to disk """
+	outfile = open(os.path.join(args['out'], 'alignments.m8'), 'w')
+	outfile.write(blastout)
+	outfile.close()
+
+def blast_cleanup(args):
+	""" Clean blast temporary files """
+	basename = os.path.join(args['out'], os.path.basename(args['genome']))
+	exts = ['', '.bwt', '.header', '.sa', '.sequence']
+	for ext in exts:
+		os.remove(basename+ext)
+
+def align_seqs(args):
+	""" Run HS-BLASTN """
+	build_blastdb(args)
+	blastout = run_blast(args)
 	write_m8(args, blastout)
+	blast_cleanup(args)
 
 def parse_blast(m8_path):
 	""" Yield formatted record from BLAST m8 file """
@@ -147,20 +175,6 @@ def parse_blast(m8_path):
 		r = line.rstrip().split()
 		if len(r) != 12: continue
 		else: yield dict([(fields[i], formats[i](v)) for i, v in enumerate(r)])
-
-def add_aln_cov(m8, queries):
-	""" Add query and target coverage to m8 record """
-	qlen = float(queries[m8['query_id']].length)
-	tlen = float(m8['target_id'].split('_')[-3])
-	m8['qcov'] = round(m8['aln']/qlen, 2)
-	m8['tcov'] = round(m8['aln']/tlen, 2)
-	return m8
-
-def write_m8(args, blastout):
-	""" Write tab delimited m8 file to disk """
-	outfile = open(os.path.join(args['out'], 'alignments.m8'), 'w')
-	outfile.write(blastout)
-	outfile.close()
 
 def store_alignments(genome, assembly):
 	""" Store alignments """
@@ -226,9 +240,9 @@ def compute_n50(assembly):
 	""" Compute n50 based on contig alignment lengths """
 	x = 0
 	for a in assembly.alns:
-		if x >= assembly.length/2.0: return(x)
+		if x >= assembly.length/2.0: return(a)
 		else: x += a
-	return x
+	return a
 
 def write_report(genome, assembly):
 	outfile = open(os.path.join(args['out'], 'summary.txt'), 'w')
@@ -257,7 +271,7 @@ if __name__ == "__main__":
 	assembly = Assembly(args)
 
 	print("Aligning assembly to reference genome...")
-	run_blast(args)
+	align_seqs(args)
 	
 	print("Storing results...")
 	store_alignments(genome, assembly)
