@@ -1,0 +1,11 @@
+
+
+2015-12-12
+ * fixed n50 calculation; previously lengths were not sorted
+ * fixed ppv calculation; now only mapped contigs are used
+ * added field: assembly.mapped_length
+ * added LICENSE
+ * added CHANGES
+ 
+ 
+ 

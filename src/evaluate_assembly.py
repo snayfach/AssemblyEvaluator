@@ -50,19 +50,13 @@ class Contig:
 		self.name = rec.id
 		self.seq = str(rec.seq).upper()
 		self.length = len(self.seq)
-		self.chunks = []
+		self.m8 = []
 		self.chunk_ids = set([])
+		self.mapped = False
 
 ##
 ## Functions
 ##
-
-def count_mapped_contigs(assembly):
-	""" Count number of contigs mapped to genome """
-	contig_ids = set([])
-	for contig in assembly.contigs.values():
-		if len(contig.chunks) > 0: contig_ids.add(contig.name)
-	return len(contig_ids)
 
 def uncalled_bp(contigs):
 	""" Count the number of ambiguous base calls across contigs """
@@ -190,25 +184,36 @@ def store_alignments(genome, assembly):
 		elif chunk_id in assembly.contigs[assembly_contig].chunk_ids:
 			continue
 		else:
+			assembly.contigs[assembly_contig].mapped = True
 			assembly.contigs[assembly_contig].chunk_ids.add(chunk_id)
-			assembly.contigs[assembly_contig].chunks.append(m8)
-			genome.contigs[genome_contig].chunks.append(m8)
+			assembly.contigs[assembly_contig].m8.append(m8)
+			genome.contigs[genome_contig].m8.append(m8)
+
+def assembly_ppv(assembly):
+	""" Use mapped contigs to compute assembly precision """
+	length = 0
+	aln = 0
+	for contig in assembly.contigs.values():
+		if contig.mapped:
+			length += contig.length
+			aln += contig.aln
+	return float(aln)/length
 
 def compute_assembly_stats(assembly):
 	""" Compute total alignment length and precision (i.e. chimericity) of entire assembly """
 	for contig in assembly.contigs.values():
-		contig.aln = sum([c['aln'] for c in contig.chunks])
+		contig.aln = sum([c['aln'] for c in contig.m8])
 		contig.ppv = float(contig.aln)/contig.length
-	assembly.alns = [c.aln for c in assembly.contigs.values()]
-	assembly.aln = sum(assembly.alns)
-	assembly.ppv =  float(assembly.aln)/assembly.length
-	assembly.n50 = compute_n50(assembly)
-	assembly.count_mapped = count_mapped_contigs(assembly)
+	assembly.mapped_length = sum([c.length if c.mapped else 0 for c in assembly.contigs.values()])
+	assembly.aln = sum([c.aln for c in assembly.contigs.values()])
+	assembly.ppv =  assembly_ppv(assembly)
+	assembly.n50 = assembly_n50(assembly)
+	assembly.count_mapped = sum([c.mapped for c in assembly.contigs.values()])
 
 def fetch_aln_coords(contig):
 	""" Get list of alignment coordinates for each alignment to each contig """
 	coords = []
-	for c in contig.chunks:
+	for c in contig.m8:
 		start = min(c['tstart'], c['tend'])
 		end = max(c['tstart'], c['tend'])
 		coords.append([start, end])
@@ -236,16 +241,18 @@ def compute_genome_stats(contig):
 	genome.aln = sum([contig.aln for contig in genome.contigs.values()])
 	genome.tpr = genome.aln/float(genome.length)
 
-def compute_n50(assembly):
+def assembly_n50(assembly):
 	""" Compute n50 based on contig alignment lengths """
 	x = 0
-	for a in assembly.alns:
+	sorted_alns = sorted([c.aln for c in assembly.contigs.values()], reverse=True)
+	for a in sorted_alns:
 		if x >= assembly.length/2.0: return(a)
 		else: x += a
 	return a
 
-def write_report(genome, assembly):
-	outfile = open(os.path.join(args['out'], 'summary.txt'), 'w')
+def write_asm_report(genome, assembly):
+	""" Report alignment results for genome and assembly """
+	outfile = open(os.path.join(args['out'], 'asm.summary.txt'), 'w')
 	outfile.write('%s\t%s\n' % ('genome.name', genome.name))
 	outfile.write('%s\t%s\n' % ('genome.count_contigs', genome.count_contigs))
 	outfile.write('%s\t%s\n' % ('genome.length', genome.length))
@@ -255,10 +262,20 @@ def write_report(genome, assembly):
 	outfile.write('%s\t%s\n' % ('assembly.name', assembly.name))
 	outfile.write('%s\t%s\n' % ('assembly.count_contigs', assembly.count_contigs))
 	outfile.write('%s\t%s\n' % ('assembly.count_mapped', assembly.count_mapped))
-	outfile.write('%s\t%s\n' % ('assembly.length', assembly.length))
+	outfile.write('%s\t%s\n' % ('assembly.total_length', assembly.length))
+	outfile.write('%s\t%s\n' % ('assembly.mapped_length', assembly.mapped_length))
 	outfile.write('%s\t%s\n' % ('assembly.aln', assembly.aln))
 	outfile.write('%s\t%s\n' % ('assembly.n50', assembly.n50))
 	outfile.write('%s\t%s\n' % ('assembly.ppv', assembly.ppv))
+
+def write_contig_report(assembly):
+	""" Report alignment results for assembled contigs """
+	outfile = open(os.path.join(args['out'], 'contig.summary.txt'), 'w')
+	fields = ['contig.name', 'contig.length', 'contig.mapped', 'contig.aln', 'contig.ppv']
+	outfile.write('\t'.join([str(_) for _ in fields])+'\n')
+	for contig in assembly.contigs.values():
+		values = [contig.name, contig.length, contig.mapped, contig.aln, contig.ppv]
+		outfile.write('\t'.join([str(_) for _ in values])+'\n')
 
 ##
 ## Main
@@ -280,9 +297,9 @@ if __name__ == "__main__":
 	compute_assembly_stats(assembly)
 	compute_genome_stats(genome)
 
-	print("Writing report...")
-	write_report(genome, assembly)
-
+	print("Writing reports...")
+	write_asm_report(genome, assembly)
+	write_contig_report(assembly)
 
 
 	
