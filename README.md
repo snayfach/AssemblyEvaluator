@@ -10,7 +10,7 @@ Ideally, reads from reference genome should present in metagenome used to build 
 clone software: `git clone https://github.com/snayfach/AssemblyEvaluator`  
 
 ## Usage
-**usage: evaluate_assembly.py [-h] --assembly FASTA [--genome FASTA] --out DIR  
+**evaluate_assembly.py [-h] --assembly FASTA --genome FASTA --out DIR  
                             [--threads INT] [--chunk_size INT] [--pid FLOAT]  
 							[--aln INT] [--word_size INT]**
 
@@ -28,20 +28,40 @@ optional arguments:
   **--word_size** INT   Word size for BLAST (default: 50)
 
 ## Example
-src/evaluate_assembly.py --assembly example/assembly.fa --genome example/genome.fa --out example
 
-## Output file definitions
+* evaluate assembled contigs versus a reference genome:  
+`src/evaluate_assembly.py --assembly example/assembled_contigs.fa --genome example/reference_genome.fa --out example`
 
-**genome.name:** file name for reference genome  
-**genome.count_contigs:** number of sequences in reference genome  
-**genome.length:** total length of reference genome minus ambiguous bases (N)  
-**genome.aln:** number of bases in reference genome covered by assembly  
-**genome.tpr:** proportion of bases in reference genome covered by assembly
+* evaluate assembled genes versus a genes from a reference genome:  
+`src/evaluate_assembly.py --assembly example/assembled_genes.fa --genome example/reference_genes.fa --out example`
 
-**assembly.name:** file name for metagenomic assembly  
-**assembly.count_contigs:** number of contigs in assembly  
-**assembly.count_mapped:** number of contigs in assembly that mapped to reference genome  
-**assembly.length:** total length of assembly minus ambiguous bases (N)  
-**assembly.aln:** total number of bp aligned to reference genome  
-**assembly.n50:** N50 of alignment lengths  
-**assembly.ppv:** proportion of bp aligned to reference genome for mapped contigs
+
+## Output files
+
+### asm.summary.txt
+*genome.name:* file name for reference genome  
+*genome.count_contigs:* number of sequences in reference genome  
+*genome.length:* total length of reference genome minus ambiguous bases (N)  
+*genome.aln:* number of bases in reference genome covered by assembly  
+*genome.tpr:* proportion of bases in reference genome covered by assembly
+
+*assembly.name:* file name for metagenomic assembly  
+*assembly.count_contigs:* number of contigs in assembly  
+*assembly.count_mapped:* number of contigs in assembly that mapped to reference genome  
+*assembly.total_length:* length of assembly minus ambiguous bases (N)  
+*assembly.mapped_length:* length of mapped contigs minus ambiguous bases (N)    
+*assembly.aln:* total number of bp aligned to reference genome  
+*assembly.n50:* N50 of alignment lengths  
+*assembly.ppv:* proportion of bp aligned to reference genome for mapped contigs
+
+The most important variables are **genome.tpr**, which indicates the fraction of reference genome/genes covered by the assembly, and **assembly.ppv**, which indicates the fraction of mapped contig length that is aligned to the genome/genes.
+
+A low **genome.tpr** indicates that most of the reference genome/genes was not recovered by the assembly
+
+A low **assembly.ppv** indicates that a significant proportion of assembled contigs that mapped to the reference were chimeric
+
+### contig.summary.txt
+Per-contig report
+
+### alignments.m8
+tabular outpur from HS-BLASTN

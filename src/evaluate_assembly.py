@@ -69,7 +69,7 @@ def parse_arguments():
 		description="""Evaluate a metagenomic assembly by mapping to a reference genome""")
 	parser.add_argument('--assembly', type=str, required=True, metavar='FASTA',
 						help="Path to input multi-FASTA file containing one or more contigs")
-	parser.add_argument('--genome', type=str, required=False, metavar='FASTA',
+	parser.add_argument('--genome', type=str, required=True, metavar='FASTA',
 						help="Path to reference genome FASTA file")
 	parser.add_argument('--out', dest='out', type=str, required=True, metavar='DIR',
 						help="""
