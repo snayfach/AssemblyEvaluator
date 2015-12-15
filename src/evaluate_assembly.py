@@ -245,8 +245,9 @@ def assembly_n50(assembly):
 	""" Compute n50 based on contig alignment lengths """
 	x = 0
 	sorted_alns = sorted([c.aln for c in assembly.contigs.values()], reverse=True)
+	total_length = sum(sorted_alns)
 	for a in sorted_alns:
-		if x >= assembly.length/2.0: return(a)
+		if x >= total_length/2.0: return(a)
 		else: x += a
 	return a
 
