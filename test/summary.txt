@@ -1,0 +1,13 @@
+genome.name	657322.3.PATRIC.ffn
+genome.count_contigs	3052
+genome.length	2689250
+genome.aln	2686472
+genome.tpr	0.998966998234
+
+assembly.name	657322.3.PATRIC.ffn
+assembly.count_contigs	3052
+assembly.count_mapped	3050
+assembly.length	2689250
+assembly.aln	2686472
+assembly.n50	936
+assembly.ppv	0.998966998234
