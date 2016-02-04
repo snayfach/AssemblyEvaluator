@@ -1,6 +1,17 @@
 # Assembly Evaluator  
-Evaluate the completedness and precision of a metagenomic assembly by mapping contigs to a reference genome.  
-Ideally, reads from reference genome should present in metagenome used to build assembly.
+Evaluate the completedness and precision of a (meta)genomic assembly by mapping contigs to a complete reference genome.  
+
+Use this tool to evaluate an assembly when you know *apriori* that a reference genome is present. For example, if you "spiked-in" simulated reads, or if you are assembling an in-silico simulated metagenome.
+
+This tool will map the contigs back to the reference genome and answer three questions:
+* (Completedness) What fraction of the reference is covered by mapped contigs?
+* (Precision/Chimericity) Of those mapped contigs, what fraction is aligned to the reference?
+* (Quality) How long are the mapped contigs? What is their N50?
+
+Use cases:
+* Spike-in short-reads from a reference genome into a complex metagenome and assemble data into contigs. Use AssemblyEvaluator to evaluate the resulting contigs for precision and completedness
+* Other cases when assembling data where is a completed reference genome to map to
+* You can also use the tool to evaluate a set of genes identified from assembled contigs
 
 ## Dependencies
 * Python >=2.6
